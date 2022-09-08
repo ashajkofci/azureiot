@@ -156,6 +156,11 @@ async def main(current_bactosense):
     while not client.terminated():
         try:
             props = get_properties_from_bactosense(ip)
+
+            # Send error if there is an error and data until the error is solved
+            if props['Error'] != "":
+                await client.send_property(props)
+
             data = get_telemetry_from_bactosense(ip)
         except:
             await client._logger.info("Connection error for ip {}...".format(ip))
@@ -173,7 +178,7 @@ async def main(current_bactosense):
         else:
             await client._logger.info("No new data, waiting...")
 
-        await asyncio.sleep(30)
+        await asyncio.sleep(60)
 
 all_bactosense = ["BACTO910107", "BACTO910018", "BACTO910246"]
 loop = asyncio.get_event_loop()

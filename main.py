@@ -1,12 +1,14 @@
 import asyncio
+from concurrent.futures import ProcessPoolExecutor
 import configparser
-from datetime import datetime
 import json
 import logging
 import logging.handlers
-import requests
+import argparse
 import os
+from datetime import datetime
 
+import requests
 from iotc import IOTCConnectType, IOTCEvents, IOTCLogLevel
 from iotc.aio import IoTCClient
 from iotc.models import Command, Property
@@ -38,13 +40,6 @@ class FileLogger:
         self._log_level = log_level
 
 
-current_bactosense = "BACTO910107"
-device_id = config[current_bactosense]["DeviceId"]
-scope_id = config[current_bactosense]["ScopeId"]
-key = config[current_bactosense]["SasKey"]
-hub_name = "bactosense"
-data_filename = "last_data.json"
-
 async def on_props(prop: Property):
     print(f"Received {prop.name}:{prop.value}")
     return True
@@ -60,22 +55,7 @@ async def on_enqueued_commands(command: Command):
         command.name, command.value))
 
 
-# change connect type to reflect the used key (device or group)
-client = IoTCClient(
-    device_id,
-    scope_id,
-    IOTCConnectType.IOTC_CONNECT_SYMM_KEY,
-    key,
-    logger=FileLogger("."),
-)
-
-client.set_log_level(IOTCLogLevel.IOTC_LOGGING_ALL)
-client.on(IOTCEvents.IOTC_PROPERTIES, on_props)
-client.on(IOTCEvents.IOTC_COMMAND, on_commands)
-client.on(IOTCEvents.IOTC_ENQUEUED_COMMAND, on_enqueued_commands)
-
-
-def get_telemetry_from_bactosense(ip = config[current_bactosense]["Ip"]):
+def get_telemetry_from_bactosense(ip):
     resp = requests.get("http://"+ip+"/data/auto/last", auth=('service', '0603'))
     resp = resp.json()
     data = {}
@@ -95,7 +75,7 @@ def get_telemetry_from_bactosense(ip = config[current_bactosense]["Ip"]):
             
     return data
 
-def get_properties_from_bactosense(ip = config[current_bactosense]["Ip"]):
+def get_properties_from_bactosense(ip):
     resp = requests.get("http://"+ip+"/api/status", auth=('service', '0603'))
     resp = resp.json()
     data = {}
@@ -127,17 +107,39 @@ def get_properties_from_bactosense(ip = config[current_bactosense]["Ip"]):
 
     return data
 
-async def main():
+async def main(current_bactosense):
+
+    device_id = config[current_bactosense]["DeviceId"]
+    scope_id = config[current_bactosense]["ScopeId"]
+    key = config[current_bactosense]["SasKey"]
+    ip = config[current_bactosense]["Ip"]
+
+    data_filename = "last_data_{}.json".format(current_bactosense)
+
     try:
         last_data = json.load(open(data_filename, 'r'))
     except:
         last_data = {}
 
+    # change connect type to reflect the used key (device or group)
+    client = IoTCClient(
+        device_id,
+        scope_id,
+        IOTCConnectType.IOTC_CONNECT_SYMM_KEY,
+        key,
+        logger=FileLogger("."),
+    )
+
+    client.set_log_level(IOTCLogLevel.IOTC_LOGGING_ALL)
+    client.on(IOTCEvents.IOTC_PROPERTIES, on_props)
+    client.on(IOTCEvents.IOTC_COMMAND, on_commands)
+    client.on(IOTCEvents.IOTC_ENQUEUED_COMMAND, on_enqueued_commands)
+
     await client.connect()
     
     while not client.terminated():
-        data = get_telemetry_from_bactosense()
-        props = get_properties_from_bactosense()
+        data = get_telemetry_from_bactosense(ip)
+        props = get_properties_from_bactosense(ip)
 
         if data != last_data:
             msg_prop = {
@@ -152,4 +154,8 @@ async def main():
 
         await asyncio.sleep(30)
 
-asyncio.run(main())
+all_bactosense = ["BACTO910107", "BACTO910018", "BACTO910246"]
+loop = asyncio.get_event_loop()
+for bactosense in all_bactosense:
+    loop.create_task(main(bactosense))
+loop.run_forever()

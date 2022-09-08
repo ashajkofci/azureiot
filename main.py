@@ -104,6 +104,7 @@ def get_properties_from_bactosense(ip):
         'NextServiceDue': 'nextServiceDue',
         'Temperature': 'temperature',
         'Humidity': 'humidity',
+        'Error': 'lastError',
     }
 
     for key, value in fields.items():
@@ -115,6 +116,10 @@ def get_properties_from_bactosense(ip):
 
     if 'CartridgeExpiry' in data:
         data['CartridgeExpiry'] = datetime.fromtimestamp(int(data['CartridgeExpiry'])).isoformat()
+
+    if 'Error' in data:
+        if data['Error'] == "UnknownError":
+            data['Error'] = ""
 
     return data
 

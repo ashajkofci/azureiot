@@ -65,14 +65,24 @@ def get_telemetry_from_bactosense(ip):
         'ICC': 'ICC',
         'TCC': 'TCC',
         'HNAP': 'HNAP',
+        'HNAC': 'HNAC',
+        'LNAC': 'LNAC',
         'Date': 'date',
         'UTCDate': 'dateUtc',
+        'Name': 'name',
+        'Protocol': 'protocol',
+        'Username': 'username',
+        'CartridgeSerial': 'cartridgeSerial',
+        'DateSampling': 'dateSampling',
+        'FillSerial': 'fillSerial',
+        'GateSet':'gateSet',
+        'InstrumentName':'instrumentName'
     }
 
     for key, value in fields.items():
         if value in resp:
             data[key] = resp[value]
-            
+    
     return data
 
 def get_properties_from_bactosense(ip):
@@ -93,6 +103,7 @@ def get_properties_from_bactosense(ip):
         'SerialNumber': "serialNumber",
         'NextServiceDue': 'nextServiceDue',
         'Temperature': 'temperature',
+        'Humidity': 'humidity',
     }
 
     for key, value in fields.items():
@@ -138,14 +149,15 @@ async def main(current_bactosense):
     await client.connect()
     
     while not client.terminated():
-        data = get_telemetry_from_bactosense(ip)
         props = get_properties_from_bactosense(ip)
+        data = get_telemetry_from_bactosense(ip)
 
         if data != last_data:
             msg_prop = {
                 'iothub-creation-time-utc' : data['UTCDate']
             }
-            await client.send_telemetry(data, properties=msg_prop)
+            to_send_data = {**data, **{'Humidity': props['Humidity'], 'Temperature': props['Temperature']}}
+            await client.send_telemetry(to_send_data, properties=msg_prop)
             await client.send_property(props)
             last_data = data
             json.dump(last_data, open(data_filename, 'w'))

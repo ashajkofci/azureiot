@@ -1,78 +1,153 @@
 import asyncio
+import configparser
+from datetime import datetime
+import json
+import logging
+import logging.handlers
+import requests
 import os
-import uuid
 
-from azure.iot.device import Message
-from azure.iot.device.aio import IoTHubDeviceClient
-from azure.iot.device.aio import IoTHubDeviceClient, ProvisioningDeviceClient
+from iotc import IOTCConnectType, IOTCEvents, IOTCLogLevel
+from iotc.aio import IoTCClient
+from iotc.models import Command, Property
 
-messages_to_send = 10
+config = configparser.ConfigParser()
+config.read(os.path.join(os.path.dirname(__file__), "machines.ini"))
 
-PRIMARY_KEY = "mBUTofp4+gMVYZ5JivCRgNICjdbQOd4A1e/u76Ot/P8="
-DEVICE_ID = "bacto118"
-ID_SCOPE = "0ne0075E69E"
+class FileLogger:
+    def __init__(self, logpath, logname="iotc_py_log"):
+        self._logger = logging.getLogger(logname)
+        self._logger.setLevel(logging.DEBUG)
+        handler = logging.handlers.RotatingFileHandler(
+            os.path.join(logpath, logname), maxBytes=20000, backupCount=5)
+        self._logger.addHandler(handler)
 
-data = {    
-        "Water_Quality_Monitor_79g": {
-            "Temperature": 78.50918337376584,
-            "Conductivity": 22.537619243941425,
-            "Turbidity": 34.04916105902673,
-            "Salinity": 73.72618747652545,
-            "AcidityPH": -41.28777605279629
-        },
-        "Water_Quality_Monitor_2nj": {
-            "Ammonium": 81.86262755139609,
-            "Ammonia": 69.52489872401405,
-            "Chloride": 32.97931322181711,
-            "Nitrate": 6.380287875061088,
-            "Sodium": 66.96983463962808
-        },
-        "Water_Quality_Monitor_4yq": {
-            "Location": {
-                "lon": -96.1267,
-                "lat": 36.3185,
-                "alt": 1326.8035
-            }
-        }
+    async def _log(self, message):
+        print(message)
+        self._logger.debug(message)
+
+    async def info(self, message):
+        if self._log_level != IOTCLogLevel.IOTC_LOGGING_DISABLED:
+            await self._log(message)
+
+    async def debug(self, message):
+        if self._log_level == IOTCLogLevel.IOTC_LOGGING_ALL:
+            await self._log(message)
+
+    def set_log_level(self, log_level):
+        self._log_level = log_level
+
+
+current_bactosense = "BACTO910107"
+device_id = config[current_bactosense]["DeviceId"]
+scope_id = config[current_bactosense]["ScopeId"]
+key = config[current_bactosense]["SasKey"]
+hub_name = "bactosense"
+data_filename = "last_data.json"
+
+async def on_props(prop: Property):
+    print(f"Received {prop.name}:{prop.value}")
+    return True
+
+
+async def on_commands(command: Command):
+    print("Received command {} with value {}".format(command.name, command.value))
+    await command.reply()
+
+
+async def on_enqueued_commands(command: Command):
+    print("Received offline command {} with value {}".format(
+        command.name, command.value))
+
+
+# change connect type to reflect the used key (device or group)
+client = IoTCClient(
+    device_id,
+    scope_id,
+    IOTCConnectType.IOTC_CONNECT_SYMM_KEY,
+    key,
+    logger=FileLogger("."),
+)
+
+client.set_log_level(IOTCLogLevel.IOTC_LOGGING_ALL)
+client.on(IOTCEvents.IOTC_PROPERTIES, on_props)
+client.on(IOTCEvents.IOTC_COMMAND, on_commands)
+client.on(IOTCEvents.IOTC_ENQUEUED_COMMAND, on_enqueued_commands)
+
+
+def get_telemetry_from_bactosense(ip = config[current_bactosense]["Ip"]):
+    resp = requests.get("http://"+ip+"/data/auto/last", auth=('service', '0603'))
+    resp = resp.json()
+    data = {}
+
+    fields = {
+        'Timestamp': 'timestamp',
+        'ICC': 'ICC',
+        'TCC': 'TCC',
+        'HNAP': 'HNAP',
+        'Date': 'date',
+        'UTCDate': 'dateUtc',
     }
+
+    for key, value in fields.items():
+        if value in resp:
+            data[key] = resp[value]
+            
+    return data
+
+def get_properties_from_bactosense(ip = config[current_bactosense]["Ip"]):
+    resp = requests.get("http://"+ip+"/api/status", auth=('service', '0603'))
+    resp = resp.json()
+    data = {}
+
+    fields = {
+        'CartridgeLevel': 'cartridgeLevel',
+        'Version': 'version',
+        'CartridgeExpiry': 'cartridgeExpiry',
+        'DiskMeasurementsRemaining': 'diskMeasurementsRemaining',
+        'PumpMotions': 'pumpMotions',
+        'PlungerMotions':"plungerMotions",
+        'ValveMotions': "valveMotions",
+        'SerialNumber': "serialNumber",
+        'NextServiceDue': 'nextServiceDue',
+        'Temperature': 'temperature',
+    }
+
+    for key, value in fields.items():
+        if value in resp:
+            data[key] = resp[value]
+    
+    if 'NextServiceDue' in data:
+        data['NextServiceDue'] = datetime.fromtimestamp(int(data['NextServiceDue'])).isoformat()
+
+    if 'CartridgeExpiry' in data:
+        data['CartridgeExpiry'] = datetime.fromtimestamp(int(data['CartridgeExpiry'])).isoformat()
+
+    return data
+
 async def main():
+    try:
+        last_data = json.load(open(data_filename, 'r'))
+    except:
+        last_data = {}
 
-    # The connection string for a device should never be stored in code. For the sake of simplicity we're using an environment variable here.
-    provisioning_device_client = ProvisioningDeviceClient.create_from_symmetric_key(
-        provisioning_host='global.azure-devices-provisioning.net',
-        registration_id=DEVICE_ID,
-        id_scope=ID_SCOPE,
-        symmetric_key=PRIMARY_KEY)
-    registration_result = await provisioning_device_client.register()
+    await client.connect()
+    
+    while not client.terminated():
+        data = get_telemetry_from_bactosense()
+        props = get_properties_from_bactosense()
 
-    # Build the connection string - this is used to connect to IoT Central
-    conn_str = 'HostName=' + registration_result.registration_state.assigned_hub + \
-                ';DeviceId=' + DEVICE_ID + \
-                ';SharedAccessKey=' + PRIMARY_KEY
+        if data != last_data:
+            msg_prop = {
+                'iothub-creation-time-utc' : data['UTCDate']
+            }
+            await client.send_telemetry(data, properties=msg_prop)
+            await client.send_property(props)
+            last_data = data
+            json.dump(last_data, open(data_filename, 'w'))
+        else:
+            await client._logger.info("No new data, waiting...")
 
-    # The client object is used to interact with your Azure IoT hub.
-    device_client = IoTHubDeviceClient.create_from_connection_string(conn_str)
+        await asyncio.sleep(5)
 
-    # Connect the client.
-    await device_client.connect()
-
-    async def send_test_message(i):
-        print("sending message #" + str(i))
-        msg = Message("test wind speed " + str(i))
-        msg.message_id = uuid.uuid4()
-        #msg.correlation_id = "correlation-1234"
-        msg.custom_properties = data
-        msg.content_encoding = "utf-8"
-        msg.content_type = "application/json"
-        await device_client.send_message(msg)
-        print("done sending message #" + str(i))
-
-    # send `messages_to_send` messages in parallel
-    await asyncio.gather(*[send_test_message(i) for i in range(1, messages_to_send + 1)])
-
-    # Finally, shut down the client
-    await device_client.shutdown()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(main())

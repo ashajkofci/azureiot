@@ -1,2 +1,3 @@
 requests
 azure-iot-device
+iotc

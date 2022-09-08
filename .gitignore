@@ -1,0 +1,4 @@
+*.log
+iotc_py_log
+*.json
+*.ini

@@ -108,6 +108,8 @@ def get_properties_from_bactosense(ip = config[current_bactosense]["Ip"]):
         'PumpMotions': 'pumpMotions',
         'PlungerMotions':"plungerMotions",
         'ValveMotions': "valveMotions",
+        'MixerMotions': 'mixerMotions',
+        'CartridgeSerial': 'cartridgeSerial',
         'SerialNumber': "serialNumber",
         'NextServiceDue': 'nextServiceDue',
         'Temperature': 'temperature',
@@ -148,6 +150,6 @@ async def main():
         else:
             await client._logger.info("No new data, waiting...")
 
-        await asyncio.sleep(5)
+        await asyncio.sleep(30)
 
 asyncio.run(main())
